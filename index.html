@@ -14,17 +14,18 @@
 <body>
 <header><h1>Project Pulse</h1><p>Tamil School • Smart Attendance</p></header>
 <main>
-<section id="scanPage"><div class="panel center"><div class="eyebrow">Self-service check-in</div><h2>Scan your student QR card</h2><p class="muted intro">Hold your QR card in front of the camera. You can check in at any station.</p><div id="reader" aria-label="Camera QR code scanner"></div><div class="actions no-print"><button id="startBtn" type="button">Start camera</button><button class="secondary" id="switchBtn" type="button" hidden>Switch camera</button><button class="secondary" id="stopBtn" type="button" hidden>Stop</button></div><p id="hint" class="muted small" aria-live="polite">Tap Start camera and allow camera access.</p></div><div id="result" class="status" role="status" aria-live="polite"><div class="symbol" id="symbol"></div><h2 id="resultTitle"></h2><p id="resultDetail"></p><p id="resultTime"></p></div><div class="panel no-print"><details><summary>Test without a camera (fictional students only)</summary><p class="muted small">Paste a sample QR token. Attendance saving is not connected yet.</p><input id="manualToken" placeholder="Demo token" autocomplete="off"><div class="actions"><button id="manualBtn" type="button">Test check-in</button></div></details></div></section>
-<section id="cardsPage" hidden><div class="panel intro no-print"><h2>Sample student QR cards</h2><p class="muted">For fictional demo students only. Codes are generated locally in the browser.</p><div class="actions"><button id="cardsBtn" type="button">Generate demo cards</button><button class="secondary" id="printBtn" type="button">Print cards</button></div></div><div class="panel"><div id="cards" class="cards"></div></div></section>
-<section id="dashboardPage" hidden><div class="panel center"><div class="eyebrow">Today's attendance</div><div class="metric" id="summaryMetric">—</div><p id="summary">Google Sheets backend not connected yet.</p><button id="refreshBtn" type="button">Refresh</button></div></section>
+<section id="scanPage"><div class="panel center"><div class="eyebrow">Self-service check-in</div><h2>Scan your student QR card</h2><p class="muted intro">Hold your QR card in front of the camera. You can check in at any station.</p><div id="reader" aria-label="Camera QR code scanner"></div><div class="actions no-print"><button id="startBtn" type="button">Start camera</button><button class="secondary" id="switchBtn" type="button" hidden>Switch camera</button><button class="secondary" id="stopBtn" type="button" hidden>Stop</button></div><p id="hint" class="muted small" aria-live="polite">Tap Start camera and allow camera access.</p></div><div id="result" class="status" role="status" aria-live="polite"><div class="symbol" id="symbol"></div><h2 id="resultTitle"></h2><p id="resultDetail"></p><p id="resultTime"></p></div><div class="panel no-print"><details><summary>Test without a camera (fictional students only)</summary><p class="muted small">Paste a sample QR token. Enter a QRToken from a fictional student in your Students sheet.</p><input id="manualToken" placeholder="Demo token" autocomplete="off"><div class="actions"><button id="manualBtn" type="button">Test check-in</button></div></details></div></section>
+<section id="cardsPage" hidden><div class="panel intro no-print"><h2>Sample student QR cards</h2><p class="muted">For fictional demo students only. Codes are generated locally and are NOT registered in Google Sheets; they will be rejected by the backend.</p><div class="actions"><button id="cardsBtn" type="button">Generate demo cards</button><button class="secondary" id="printBtn" type="button">Print cards</button></div></div><div class="panel"><div id="cards" class="cards"></div></div></section>
+<section id="dashboardPage" hidden><div class="panel center"><div class="eyebrow">Today's attendance</div><div class="metric" id="summaryMetric">—</div><p id="summary">Attendance summary is not exposed by the backend.</p><button id="refreshBtn" type="button">Refresh</button></div></section>
 <div class="links no-print"><a href="?page=scan">Scanner</a><a href="?page=cards">Demo cards</a><a href="?page=dashboard">Summary</a></div>
-<p class="foot no-print">Demo only — use fictional student records. Real student deployment requires volunteer authentication, protected QR credentials, and privacy safeguards.</p>
+<p class="foot no-print">Prototype only — use fictional student records. Real student deployment requires volunteer authentication, protected QR credentials, and privacy safeguards.</p>
 </main>
 <script>
 'use strict';
 const requestedPage = new URLSearchParams(location.search).get('page');
 const PAGE = ['scan','cards','dashboard'].includes(requestedPage) ? requestedPage : 'scan';
 for(const p of ['scan','cards','dashboard']) document.getElementById(p+'Page').hidden = PAGE !== p;
+const SCRIPT_URL='https://script.google.com/macros/s/AKfycbyFn0KbQckl5FUjO6SH-hb5QEItmGqsl6eHHj-a_I1couosRD9vZPPeL3FstnPQH5OS/exec';
 let scanner=null, busy=false, resetTimer=null, cameraMode='environment', lastToken='', lastAt=0;
 const $ = id => document.getElementById(id);
 function hint(message){$('hint').textContent=message;}
@@ -56,10 +57,36 @@ function onScan(token){const now=Date.now();if(busy||(token===lastToken&&now-las
 function submitManual(){const token=$('manualToken').value.trim();if(token&&!busy)checkIn(token);}
 function checkIn(token){
   busy=true;clearTimeout(resetTimer);
-  // Camera/QR verification only. Never claim attendance was saved without a backend response.
-  showResult({status:'pending',message:'QR code read successfully',time:'Attendance not saved — Google Sheets connection pending.'});
-  hint('Scanner works. Google Sheets attendance integration is not connected yet.');
-  resetTimer=setTimeout(reset,4500);
+  showResult({status:'pending',message:'Checking attendance…',time:'Waiting for Google Sheets confirmation.'});
+  hint('Submitting check-in…');
+  // A standard form POST into a hidden iframe avoids a CORS preflight.
+  // Apps Script responds with postMessage containing the request nonce.
+  const nonce=crypto.randomUUID().replace(/-/g,'');
+  const frame=document.createElement('iframe');
+  frame.name='pulse_response_'+nonce;
+  frame.style.display='none';
+  frame.title='Attendance response';
+  document.body.append(frame);
+  const form=document.createElement('form');
+  form.method='POST';form.action=SCRIPT_URL;form.target=frame.name;form.style.display='none';
+  for(const [name,value] of Object.entries({action:'checkin',token,scanner:'github-pages',nonce})){
+    const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;form.append(input);
+  }
+  document.body.append(form);
+  let finished=false;
+  const cleanup=()=>{window.removeEventListener('message',receive);clearTimeout(timeout);form.remove();frame.remove();};
+  const finish=res=>{if(finished)return;finished=true;cleanup();showResult(res);hint(res.status==='success'?'Attendance saved in Google Sheets.':res.message||'Check-in failed.');resetTimer=setTimeout(reset,5500);};
+  function receive(event){
+    // Google's Apps Script HTML responses are served from googleusercontent.com.
+    if(!/^https:\/\/([a-z0-9-]+\.)*googleusercontent\.com$/i.test(event.origin))return;
+    if(event.source!==frame.contentWindow)return;
+    const data=event.data;
+    if(!data||data.type!=='pulse-response'||data.nonce!==nonce)return;
+    finish(data.result||{status:'error',message:'Empty server response'});
+  }
+  window.addEventListener('message',receive);
+  const timeout=setTimeout(()=>finish({status:'error',message:'No response from Google Apps Script. Check deployment access and permissions.'}),20000);
+  try{form.submit();}catch(e){finish({status:'error',message:'Could not submit check-in: '+e.message});}
 }
 function showResult(res){
   $('result').className='status '+(res.status||'error');
@@ -88,7 +115,7 @@ function loadCards(){
     QRCode.toCanvas(canvas,r.token,{width:180,margin:2,errorCorrectionLevel:'M'},e=>{if(e)card.append(document.createTextNode('QR error'));});
   });
 }
-function loadSummary(){$('summaryMetric').textContent='—';$('summary').textContent='Google Sheets backend not connected yet. No attendance data available.';}
+function loadSummary(){$('summaryMetric').textContent='—';$('summary').textContent='Attendance summary is not exposed by the backend. No attendance data available.';}
 $('startBtn').addEventListener('click',startScanner);
 $('switchBtn').addEventListener('click',switchCamera);
 $('stopBtn').addEventListener('click',stopScanner);
