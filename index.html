@@ -69,23 +69,24 @@ function checkIn(token){
   document.body.append(frame);
   const form=document.createElement('form');
   form.method='POST';form.action=SCRIPT_URL;form.target=frame.name;form.style.display='none';
-  for(const [name,value] of Object.entries({action:'checkin',token,scanner:'github-pages',nonce})){
+  for(const [name,value] of Object.entries({action:'checkin',token,scannerId:'github-pages',nonce})){
     const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;form.append(input);
   }
   document.body.append(form);
   let finished=false;
   const cleanup=()=>{window.removeEventListener('message',receive);clearTimeout(timeout);form.remove();frame.remove();};
-  const finish=res=>{if(finished)return;finished=true;cleanup();showResult(res);hint(res.status==='success'?'Attendance saved in Google Sheets.':res.message||'Check-in failed.');resetTimer=setTimeout(reset,5500);};
+  const finish=res=>{if(finished)return;finished=true;cleanup();showResult(res);hint(res.status==='success'?'Attendance saved in Google Sheets.':res.status==='duplicate'?'This student was already checked in today.':res.message||'Check-in could not be confirmed.');resetTimer=setTimeout(reset,5500);};
   function receive(event){
     // Google's Apps Script HTML responses are served from googleusercontent.com.
-    if(!/^https:\/\/([a-z0-9-]+\.)*googleusercontent\.com$/i.test(event.origin))return;
-    if(event.source!==frame.contentWindow)return;
+    if(!/^https:\/\/([a-z0-9-]+\.)*(googleusercontent\.com|script\.google\.com)$/i.test(event.origin))return;
+    // Apps Script HTML Service can place the response in a nested sandbox iframe.
+    // Verify the Google origin and unique request nonce rather than frame identity.
     const data=event.data;
     if(!data||data.type!=='pulse-response'||data.nonce!==nonce)return;
     finish(data.result||{status:'error',message:'Empty server response'});
   }
   window.addEventListener('message',receive);
-  const timeout=setTimeout(()=>finish({status:'error',message:'No response from Google Apps Script. Check deployment access and permissions.'}),20000);
+  const timeout=setTimeout(()=>finish({status:'error',message:'Confirmation unavailable. Attendance MAY have been saved; check Google Sheets before trying again.'}),20000);
   try{form.submit();}catch(e){finish({status:'error',message:'Could not submit check-in: '+e.message});}
 }
 function showResult(res){
